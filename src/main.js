@@ -129,6 +129,7 @@ function renderNew() {
         <input id="psearch" placeholder="Type to search ${products.length} products…" autocomplete="off" />
         <div id="presults" class="results" hidden></div>
       </div>
+      <button class="link" id="add-product">+ Add new product to catalogue</button>
       <div id="pickedbox"></div>
       <div class="addrow">
         <div><label>Quantity</label><input type="number" id="pqty" inputmode="numeric" min="1" step="1" placeholder="0" /></div>
@@ -159,6 +160,7 @@ function renderNew() {
   $('#f-driver').oninput = (e) => { d.driver = e.target.value; persistDraft(); };
   $('#f-note').oninput = (e) => { d.note = e.target.value; persistDraft(); };
   $('#add-unit').onclick = addUnit;
+  $('#add-product').onclick = () => addProduct($('#psearch').value);
   $('#btn-add').onclick = addItem;
   $('#pqty').addEventListener('keydown', (e) => { if (e.key === 'Enter') addItem(); });
   $('#btn-save').onclick = saveTransfer;
@@ -169,7 +171,7 @@ function renderNew() {
     const q = s.value.trim().toLowerCase();
     if (!q) { r.hidden = true; return; }
     const list = products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q).slice(0, 30);
-    r.innerHTML = list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || '<div class="res">No match</div>';
+    r.innerHTML = list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || '<div class="res">No match — use “+ Add new product to catalogue” below</div>';
     r.hidden = false;
   });
   r.addEventListener('click', (e) => {
@@ -225,6 +227,20 @@ async function addUnit() {
   units = [...units, name].sort(); toast(`${name} added`);
   const keep = { from: draft.from, to: draft.to };
   renderNew(); $('#f-from').value = keep.from; $('#f-to').value = keep.to;
+}
+
+async function addProduct(prefill = '') {
+  const name = (prompt('New product name', prefill.trim()) || '').trim();
+  if (!name) return;
+  if (products.some((p) => p.name.toLowerCase() === name.toLowerCase())) return toast('Product already exists', 'error');
+  const { data: mx } = await supabase.from('ut_products').select('sno').order('sno', { ascending: false }).limit(1);
+  let sno = (mx?.[0]?.sno || 0) + 1;
+  let { data, error } = await supabase.from('ut_products').insert([{ sno, name, rate: 0, active: true }]).select().single();
+  if (error && error.code === '23505') { sno += 1; ({ data, error } = await supabase.from('ut_products').insert([{ sno, name, rate: 0, active: true }]).select().single()); }
+  if (error) return toast('Could not add: ' + error.message, 'error');
+  products = [...products, data].sort((a, b) => a.name.localeCompare(b.name));
+  picked = data; $('#psearch').value = ''; $('#presults').hidden = true;
+  renderPicked(); toast(`${name} added to catalogue`); $('#pqty').focus();
 }
 
 // ── SAVED ──
