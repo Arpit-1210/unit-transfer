@@ -60,3 +60,15 @@ td input { padding: 7px 8px; width: 78px; text-align: right; }
 .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 .toast.error { background: var(--red); }
 @media (max-width: 480px) { .row { grid-template-columns: 1fr; } .route { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); padding: 0; } }
+
+.brandrow { display: flex; align-items: center; justify-content: space-between; }
+.logout { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 6px 12px; font: 600 13px 'Inter'; color: var(--mute); cursor: pointer; }
+.login { max-width: 380px; margin: 40px auto 0; }
+.login h2 { margin: 0 0 4px; }
+.login p { margin: 0 0 16px; color: var(--mute); font-size: 13px; }
+.login .field { margin-bottom: 12px; }
+.pwwrap { position: relative; }
+.pwwrap input { padding-right: 64px; }
+.pwwrap button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--mute); font: 600 12px 'Inter'; cursor: pointer; padding: 6px; }
+.login .err { color: #b91c1c; font-size: 13px; min-height: 18px; margin-bottom: 8px; }
+[hidden] { display: none !important; }

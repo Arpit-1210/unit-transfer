@@ -130,6 +130,7 @@ function renderNew() {
         <div id="presults" class="results" hidden></div>
       </div>
       <button class="link" id="add-product">+ Add new product to catalogue</button>
+      <div id="newprod"></div>
       <div id="pickedbox"></div>
       <div class="addrow">
         <div><label>Quantity</label><input type="number" id="pqty" inputmode="numeric" min="1" step="1" placeholder="0" /></div>
@@ -230,17 +231,31 @@ async function addUnit() {
 }
 
 async function addProduct(prefill = '') {
-  const name = (prompt('New product name', prefill.trim()) || '').trim();
-  if (!name) return;
-  if (products.some((p) => p.name.toLowerCase() === name.toLowerCase())) return toast('Product already exists', 'error');
+  const box = $('#newprod');
+  if (box.innerHTML) { box.innerHTML = ''; return; }
   const { data: mx } = await supabase.from('ut_products').select('sno').order('sno', { ascending: false }).limit(1);
-  let sno = (mx?.[0]?.sno || 0) + 1;
-  let { data, error } = await supabase.from('ut_products').insert([{ sno, name, rate: 0, active: true }]).select().single();
-  if (error && error.code === '23505') { sno += 1; ({ data, error } = await supabase.from('ut_products').insert([{ sno, name, rate: 0, active: true }]).select().single()); }
-  if (error) return toast('Could not add: ' + error.message, 'error');
-  products = [...products, data].sort((a, b) => a.name.localeCompare(b.name));
-  picked = data; $('#psearch').value = ''; $('#presults').hidden = true;
-  renderPicked(); toast(`${name} added to catalogue`); $('#pqty').focus();
+  const next = (mx?.[0]?.sno || 0) + 1;
+  box.innerHTML = `<div class="picked" style="display:block">
+    <div class="row">
+      <div><label>Product code (S.NO)</label><input id="np-code" type="number" inputmode="numeric" min="1" value="${next}" /></div>
+      <div><label>Product name</label><input id="np-name" value="${esc(prefill.trim())}" placeholder="e.g. Ganesh Statue 2ft" /></div>
+    </div>
+    <div class="stack"><button class="btn primary" id="np-save">Save product</button><button class="btn ghost" id="np-cancel">Cancel</button></div>
+  </div>`;
+  $('#np-cancel').onclick = () => { box.innerHTML = ''; };
+  $('#np-save').onclick = async () => {
+    const sno = parseInt($('#np-code').value, 10);
+    const name = $('#np-name').value.trim();
+    if (!sno || sno < 1) return toast('Enter a product code', 'error');
+    if (!name) return toast('Enter product name', 'error');
+    if (products.some((p) => p.sno === sno)) return toast(`Code ${sno} already used`, 'error');
+    if (products.some((p) => p.name.toLowerCase() === name.toLowerCase())) return toast('Product name already exists', 'error');
+    const { data, error } = await supabase.from('ut_products').insert([{ sno, name, rate: 0, active: true }]).select().single();
+    if (error) return toast('Could not add: ' + error.message, 'error');
+    products = [...products, data].sort((x, y) => x.name.localeCompare(y.name));
+    picked = data; box.innerHTML = ''; $('#psearch').value = ''; $('#presults').hidden = true;
+    renderPicked(); toast(`${name} (#${sno}) added to catalogue`); $('#pqty').focus();
+  };
 }
 
 // ── SAVED ──
@@ -349,11 +364,42 @@ function renderDetail() {
   };
 }
 
-// ── start ──
-(async function init() {
+// ── login ──
+function showLogin() {
+  document.querySelector('.tabs').hidden = true; $('#logout').hidden = true;
+  $('#app').innerHTML = `
+    <form class="card login" id="login-form" autocomplete="on">
+      <h2>🔒 Sign in</h2>
+      <p>Enter your login ID and password to continue.</p>
+      <div class="field"><label>Login ID</label><input id="l-email" type="email" name="username" autocomplete="username" inputmode="email" placeholder="name@gfpl.com" required /></div>
+      <div class="field"><label>Password</label><div class="pwwrap"><input id="l-pass" type="password" name="password" autocomplete="current-password" required /><button type="button" id="l-show">Show</button></div></div>
+      <div class="err" id="l-err"></div>
+      <button class="btn primary" id="l-go" type="submit">Sign in</button>
+    </form>`;
+  $('#l-show').onclick = () => { const i = $('#l-pass'); const s = i.type === 'password'; i.type = s ? 'text' : 'password'; $('#l-show').textContent = s ? 'Hide' : 'Show'; };
+  $('#login-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $('#l-go'); btn.disabled = true; btn.textContent = 'Signing in…'; $('#l-err').textContent = '';
+    const { error } = await supabase.auth.signInWithPassword({ email: $('#l-email').value.trim(), password: $('#l-pass').value });
+    if (error) { btn.disabled = false; btn.textContent = 'Sign in'; $('#l-err').textContent = /invalid|credentials/i.test(error.message) ? 'Wrong login ID or password' : error.message; return; }
+    startApp();
+  };
+}
+
+async function startApp() {
+  document.querySelector('.tabs').hidden = false; $('#logout').hidden = false;
   $('#app').innerHTML = '<div class="empty">Loading…</div>';
   try { await loadBase(); }
-  catch (e) { $('#app').innerHTML = `<div class="card empty">Could not connect to the database.<br/><small>${esc(e.message || e)}</small><br/><br/>Did you run sql/setup.sql in Supabase?</div>`; return; }
-  draft = restoreDraft();
+  catch (e) { $('#app').innerHTML = `<div class="card empty">Could not connect to the database.<br/><small>${esc(e.message || e)}</small><br/><br/>Did you run the SQL setup files in Supabase?</div>`; return; }
+  draft = restoreDraft(); view = 'new'; detail = null; saved = null;
   render();
+}
+
+$('#logout').onclick = async () => { await supabase.auth.signOut(); showLogin(); };
+
+// ── start ──
+(async function init() {
+  const { data } = await supabase.auth.getSession();
+  if (data?.session) startApp(); else showLogin();
+  supabase.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') showLogin(); });
 })();
