@@ -462,8 +462,10 @@ async function startApp() {
   $('#app').innerHTML = '<div class="empty">Loading…</div>';
   const { data: u } = await supabase.auth.getUser();
   const email = (u?.user?.email || '').toLowerCase();
-  const m = email.match(/^unit(\d+)@gfpl\.com$/);
-  role = { admin: email === 'admin@gfpl.com', unit: m ? 'Unit ' + m[1] : null, email };
+  const admin = email === 'admin@gfpl.com';
+  let unit = null;
+  if (!admin) { const r = await supabase.rpc('ut_unit_of'); unit = r.data || null; }
+  role = { admin, unit, email };
   $('#logout').hidden = false;
   if (!role.admin && !role.unit) { document.querySelector('.tabs').hidden = true; $('#app').innerHTML = '<div class="card empty">This login is not allowed to use Unit Transfer.<br/>Ask the owner.</div>'; return; }
   document.querySelector('.tabs').hidden = !role.admin;   // unit users only see the entry screen
