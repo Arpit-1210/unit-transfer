@@ -18,6 +18,7 @@ function toast(msg, type = '') {
 }
 
 // ── state ──
+let role = { admin: false, unit: null, email: '' };
 let units = [], products = [];
 let view = 'new';
 let draft = blankDraft();
@@ -26,15 +27,16 @@ let saved = null;           // { transfer, items } after a successful save
 let history = [];
 let histFilter = { q: '', from: '', to: '' };
 let detail = null;
+let edit = null;            // admin: transfer being edited
 
 function blankDraft(keep = {}) {
-  return { no: '', date: todayIST(), from: keep.from || '', to: keep.to || '', vehicle_type: 'Van', vehicle_no: '', driver: '', note: '', items: [] };
+  return { no: '', date: todayIST(), from: role.unit || keep.from || '', to: keep.to || '', vehicle_type: 'Van', vehicle_no: '', driver: '', note: '', items: [] };
 }
 const persistDraft = () => { try { localStorage.setItem(LS_KEY, JSON.stringify(draft)); } catch {} };
 function restoreDraft() {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
-    if (d && d.items && d.items.length) return { ...blankDraft(), ...d };
+    if (d && d.items && d.items.length) return { ...blankDraft(), ...d, from: role.unit || d.from };
   } catch {}
   return blankDraft();
 }
@@ -51,11 +53,9 @@ async function loadBase() {
 }
 
 async function nextNumber(date) {
-  const prefix = `UT-${date.replaceAll('-', '')}-`;
-  const { data } = await supabase.from('ut_transfers').select('transfer_no').like('transfer_no', prefix + '%').order('transfer_no', { ascending: false }).limit(1);
-  const last = data?.[0]?.transfer_no;
-  const n = last ? parseInt(last.slice(prefix.length), 10) + 1 : 1;
-  return prefix + String(n).padStart(3, '0');
+  const { data, error } = await supabase.rpc('ut_next_no', { p_date: date });
+  if (error) throw error;
+  return data;
 }
 
 async function saveTransfer() {
@@ -64,23 +64,13 @@ async function saveTransfer() {
   if (d.from === d.to) return toast('From and To unit must be different', 'error');
   if (!d.items.length) return toast('Add at least one product', 'error');
   const btn = $('#btn-save'); btn.disabled = true; btn.textContent = 'Saving…';
-  const totalQty = d.items.reduce((s, i) => s + Number(i.qty), 0);
-  let no = d.no || (await nextNumber(d.date));
-  const row = () => ({
-    transfer_no: no, transfer_date: d.date, from_unit: d.from, to_unit: d.to,
-    vehicle_type: d.vehicle_type, vehicle_no: d.vehicle_no.trim(), driver: d.driver.trim(), note: d.note.trim(),
-    total_qty: totalQty, status: 'done',
-  });
-  let { data: t, error } = await supabase.from('ut_transfers').insert([row()]).select().single();
-  if (error && error.code === '23505') { no = await nextNumber(d.date); ({ data: t, error } = await supabase.from('ut_transfers').insert([row()]).select().single()); }
+  const { data: res, error } = await supabase.rpc('ut_save_transfer', { p: {
+    transfer_date: d.date, from_unit: d.from, to_unit: d.to, vehicle_type: d.vehicle_type,
+    vehicle_no: d.vehicle_no.trim(), driver: d.driver.trim(), note: d.note.trim(),
+    items: d.items.map((i) => ({ sno: i.sno, name: i.name, qty: i.qty })),
+  } });
   if (error) { btn.disabled = false; btn.textContent = 'Save & Download PDF'; return toast('Save failed: ' + error.message, 'error'); }
-  const items = d.items.map((i, n) => ({ transfer_id: t.id, sno: i.sno, product_name: i.name, quantity: i.qty, position: n + 1 }));
-  const ins = await supabase.from('ut_items').insert(items);
-  if (ins.error) {
-    await supabase.from('ut_transfers').delete().eq('id', t.id);
-    btn.disabled = false; btn.textContent = 'Save & Download PDF';
-    return toast('Save failed: ' + ins.error.message, 'error');
-  }
+  const t = res.transfer, items = res.items;
   saved = { transfer: t, items };
   try { localStorage.removeItem(LS_KEY); } catch {}
   makePdf(t, items).save(`${t.transfer_no}.pdf`);
@@ -107,11 +97,11 @@ function renderNew() {
     <div class="card">
       <div class="logno"><div><label style="margin:0">Transfer log</label><b id="lognum">${esc(d.no || '…')}</b></div><span class="badge">Draft</span></div>
       <div class="route">
-        <div><label>From unit</label><select id="f-from">${unitOptions(d.from, 'Select unit')}</select></div>
+        <div><label>From unit</label><select id="f-from" ${role.admin ? '' : 'disabled'}>${role.admin ? unitOptions(d.from, 'Select unit') : `<option>${esc(role.unit)}</option>`}</select></div>
         <div class="arrow">→</div>
         <div><label>To unit</label><select id="f-to">${unitOptions(d.to, 'Select unit')}</select></div>
       </div>
-      <button class="link" id="add-unit">+ Add another unit</button>
+      ${role.admin ? '<button class="link" id="add-unit">+ Add another unit</button>' : ''}
       <div class="row" style="margin-top:6px">
         <div><label>Date</label><input type="date" id="f-date" value="${d.date}" /></div>
         <div><label>Vehicle</label><select id="f-vtype">${VEHICLES.map((v) => `<option ${v === d.vehicle_type ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
@@ -129,7 +119,7 @@ function renderNew() {
         <input id="psearch" placeholder="Type to search ${products.length} products…" autocomplete="off" />
         <div id="presults" class="results" hidden></div>
       </div>
-      <button class="link" id="add-product">+ Add new product to catalogue</button>
+      ${role.admin ? '<button class="link" id="add-product">+ Add new product to catalogue</button>' : ''}
       <div id="newprod"></div>
       <div id="pickedbox"></div>
       <div class="addrow">
@@ -153,15 +143,14 @@ function renderNew() {
   renderItems(); renderPicked();
   if (!d.no) setNumber();
 
-  $('#f-from').onchange = (e) => { d.from = e.target.value; persistDraft(); };
+  if (role.admin) $('#f-from').onchange = (e) => { d.from = e.target.value; persistDraft(); };
   $('#f-to').onchange = (e) => { d.to = e.target.value; persistDraft(); };
   $('#f-date').onchange = (e) => { d.date = e.target.value || todayIST(); d.no = ''; persistDraft(); setNumber(); };
   $('#f-vtype').onchange = (e) => { d.vehicle_type = e.target.value; persistDraft(); };
   $('#f-vno').oninput = (e) => { d.vehicle_no = e.target.value; persistDraft(); };
   $('#f-driver').oninput = (e) => { d.driver = e.target.value; persistDraft(); };
   $('#f-note').oninput = (e) => { d.note = e.target.value; persistDraft(); };
-  $('#add-unit').onclick = addUnit;
-  $('#add-product').onclick = () => addProduct($('#psearch').value);
+  if (role.admin) { $('#add-unit').onclick = addUnit; $('#add-product').onclick = () => addProduct($('#psearch').value); }
   $('#btn-add').onclick = addItem;
   $('#pqty').addEventListener('keydown', (e) => { if (e.key === 'Enter') addItem(); });
   $('#btn-save').onclick = saveTransfer;
@@ -172,7 +161,7 @@ function renderNew() {
     const q = s.value.trim().toLowerCase();
     if (!q) { r.hidden = true; return; }
     const list = products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q).slice(0, 30);
-    r.innerHTML = list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || '<div class="res">No match — use “+ Add new product to catalogue” below</div>';
+    r.innerHTML = list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || `<div class="res">No match${role.admin ? ' — use “+ Add new product to catalogue” below' : ''}</div>`;
     r.hidden = false;
   });
   r.addEventListener('click', (e) => {
@@ -266,14 +255,14 @@ function renderSaved() {
     <div class="card success">
       <div class="big">✅</div>
       <h3>${esc(t.transfer_no)} saved</h3>
-      <p>${esc(t.from_unit)} → ${esc(t.to_unit)} · ${items.length} item${items.length === 1 ? '' : 's'} · qty ${fmtQty(total)}<br/>PDF downloaded. It is also in History.</p>
+      <p>${esc(t.from_unit)} → ${esc(t.to_unit)} · ${items.length} item${items.length === 1 ? '' : 's'} · qty ${fmtQty(total)}<br/>PDF downloaded.${role.admin ? ' It is also in History.' : ''}</p>
       <div class="stack">
         <button class="btn primary" id="s-pdf">Download PDF again</button>
         <button class="btn ghost" id="s-new">Start a new transfer</button>
       </div>
     </div>`;
   $('#s-pdf').onclick = () => makePdf(t, items).save(`${t.transfer_no}.pdf`);
-  $('#s-new').onclick = () => { draft = blankDraft({ from: t.from_unit, to: t.to_unit }); saved = null; picked = null; renderNew(); };
+  $('#s-new').onclick = () => { draft = blankDraft({ from: t.from_unit, to: role.admin ? t.to_unit : '' }); saved = null; picked = null; renderNew(); };
 }
 
 // ── HISTORY ──
@@ -341,6 +330,8 @@ function renderDetail() {
         <tr><td><b>Vehicle</b></td><td>${esc(t.vehicle_type || '-')} ${esc(t.vehicle_no || '')}</td></tr>
         <tr><td><b>Driver</b></td><td>${esc(t.driver || '-')}</td></tr>
         <tr><td><b>Note</b></td><td>${esc(t.note || '-')}</td></tr>
+        ${t.edited_at ? `<tr><td><b>Edited</b></td><td>${esc(t.edited_by || '')} · ${dmy(t.edited_at)}</td></tr>` : ''}
+        ${t.created_by_email ? `<tr><td><b>Made by</b></td><td>${esc(t.created_by_email)}</td></tr>` : ''}
       </tbody></table>
     </div>
     <div class="card">
@@ -352,15 +343,96 @@ function renderDetail() {
     </div>
     <div class="stack">
       <button class="btn primary" id="d-pdf">Download PDF</button>
+      <button class="btn ghost" id="d-edit">✏️ Edit this transfer</button>
       <button class="btn danger" id="d-del">Delete this transfer</button>
     </div>`;
   $('#d-back').onclick = () => { detail = null; renderHistory(); };
   $('#d-pdf').onclick = () => makePdf(t, items.map((i) => ({ ...i }))).save(`${t.transfer_no}.pdf`);
+  $('#d-edit').onclick = startEdit;
   $('#d-del').onclick = async () => {
     if (!confirm(`Delete ${t.transfer_no}? This cannot be undone.`)) return;
     const { data, error } = await supabase.from('ut_transfers').delete().eq('id', t.id).select();
     if (error || !(data || []).length) return toast('Delete failed: ' + (error?.message || 'not allowed'), 'error');
     toast('Deleted'); detail = null; renderHistory();
+  };
+}
+
+
+// ── ADMIN: edit a saved transfer ──
+function startEdit() {
+  const { t, items } = detail;
+  edit = { from: t.from_unit, to: t.to_unit, date: String(t.transfer_date).slice(0, 10), vehicle_type: t.vehicle_type || 'Van', vehicle_no: t.vehicle_no || '', driver: t.driver || '', note: t.note || '',
+    items: items.map((i) => ({ sno: i.sno, name: i.product_name, qty: Number(i.quantity) })) };
+  renderEdit();
+}
+
+function renderEdit() {
+  const { t } = detail, e = edit;
+  const total = e.items.reduce((s, i) => s + Number(i.qty), 0);
+  $('#app').innerHTML = `
+    <button class="link" id="e-back">← Cancel editing</button>
+    <div class="card" style="margin-top:6px">
+      <div class="logno"><b>${esc(t.transfer_no)}</b><span class="badge">Editing</span></div>
+      <div class="route">
+        <div><label>From unit</label><select id="e-from">${unitOptions(e.from, 'Select unit')}</select></div>
+        <div class="arrow">→</div>
+        <div><label>To unit</label><select id="e-to">${unitOptions(e.to, 'Select unit')}</select></div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <div><label>Date</label><input type="date" id="e-date" value="${e.date}" /></div>
+        <div><label>Vehicle</label><select id="e-vtype">${VEHICLES.map((v) => `<option ${v === e.vehicle_type ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      </div>
+      <div class="row">
+        <div><label>Vehicle number</label><input id="e-vno" value="${esc(e.vehicle_no)}" /></div>
+        <div><label>Driver</label><input id="e-driver" value="${esc(e.driver)}" /></div>
+      </div>
+      <div class="field"><label>Note</label><textarea id="e-note" rows="2">${esc(e.note)}</textarea></div>
+    </div>
+    <div class="card">
+      <h2>Items</h2>
+      ${e.items.length ? `<table><thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th></th></tr></thead><tbody>
+        ${e.items.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.name)}<div style="font-size:11px;color:var(--mute)">#${i.sno ?? ''}</div></td>
+          <td class="num"><input type="number" min="1" data-eq="${n}" value="${i.qty}" inputmode="numeric" /></td>
+          <td><button class="x" data-edel="${n}" aria-label="Remove">✕</button></td></tr>`).join('')}
+      </tbody></table>
+      <div class="summary"><span>${e.items.length} item${e.items.length === 1 ? '' : 's'}</span><span>Total qty: ${fmtQty(total)}</span></div>` : '<div class="empty">No items</div>'}
+      <div class="addrow" style="margin-top:12px">
+        <div><label>Add product</label><input id="e-prod" list="e-plist" placeholder="Type product name…" autocomplete="off" /><datalist id="e-plist">${products.map((p) => `<option value="${esc(p.name)}"></option>`).join('')}</datalist></div>
+        <div><label>Qty</label><input type="number" id="e-pqty" inputmode="numeric" min="1" placeholder="0" style="width:90px" /></div>
+        <button class="btn add" id="e-add">+ Add</button>
+      </div>
+    </div>
+    <div class="stack"><button class="btn primary" id="e-save">Save changes</button><button class="btn ghost" id="e-cancel">Cancel</button></div>`;
+  const grab = () => { e.from = $('#e-from').value; e.to = $('#e-to').value; e.date = $('#e-date').value; e.vehicle_type = $('#e-vtype').value; e.vehicle_no = $('#e-vno').value; e.driver = $('#e-driver').value; e.note = $('#e-note').value; };
+  $('#e-back').onclick = $('#e-cancel').onclick = () => { edit = null; renderDetail(); };
+  document.querySelectorAll('[data-eq]').forEach((inp) => inp.addEventListener('change', () => {
+    const v = parseFloat(inp.value);
+    if (!v || v <= 0) { inp.value = e.items[inp.dataset.eq].qty; return toast('Quantity must be more than 0', 'error'); }
+    grab(); e.items[inp.dataset.eq].qty = v; renderEdit();
+  }));
+  document.querySelectorAll('[data-edel]').forEach((b) => b.addEventListener('click', () => { grab(); e.items.splice(+b.dataset.edel, 1); renderEdit(); }));
+  $('#e-add').onclick = () => {
+    const p = products.find((x) => x.name.toLowerCase() === $('#e-prod').value.trim().toLowerCase());
+    const qty = parseFloat($('#e-pqty').value);
+    if (!p) return toast('Pick a product from the list', 'error');
+    if (!qty || qty <= 0) return toast('Enter quantity', 'error');
+    grab();
+    const ex = e.items.find((i) => i.sno === p.sno);
+    if (ex) ex.qty += qty; else e.items.push({ sno: p.sno, name: p.name, qty });
+    renderEdit();
+  };
+  $('#e-save').onclick = async () => {
+    grab();
+    if (!e.from || !e.to || e.from === e.to) return toast('From and To unit must be different', 'error');
+    if (!e.items.length) return toast('Add at least one product', 'error');
+    const btn = $('#e-save'); btn.disabled = true; btn.textContent = 'Saving…';
+    const { data: res, error } = await supabase.rpc('ut_update_transfer', { p_id: t.id, p: {
+      transfer_date: e.date, from_unit: e.from, to_unit: e.to, vehicle_type: e.vehicle_type, vehicle_no: e.vehicle_no.trim(),
+      driver: e.driver.trim(), note: e.note.trim(), items: e.items.map((i) => ({ sno: i.sno, name: i.name, qty: i.qty })) } });
+    if (error) { btn.disabled = false; btn.textContent = 'Save changes'; return toast('Save failed: ' + error.message, 'error'); }
+    const i = history.findIndex((x) => x.id === t.id); if (i >= 0) history[i] = res.transfer;
+    detail = { t: res.transfer, items: res.items }; edit = null;
+    toast('Changes saved ✓'); renderDetail();
   };
 }
 
@@ -381,17 +453,23 @@ function showLogin() {
     e.preventDefault();
     const btn = $('#l-go'); btn.disabled = true; btn.textContent = 'Signing in…'; $('#l-err').textContent = '';
     const { error } = await supabase.auth.signInWithPassword({ email: $('#l-email').value.trim(), password: $('#l-pass').value });
-    if (error) { btn.disabled = false; btn.textContent = 'Sign in'; $('#l-err').textContent = /invalid|credentials/i.test(error.message) ? 'Wrong login ID or password' : error.message; return; }
+    if (error) { btn.disabled = false; btn.textContent = 'Sign in'; $('#l-err').textContent = /invalid login credentials/i.test(error.message) ? 'Wrong login ID or password' : error.message; return; }
     startApp();
   };
 }
 
 async function startApp() {
-  document.querySelector('.tabs').hidden = false; $('#logout').hidden = false;
   $('#app').innerHTML = '<div class="empty">Loading…</div>';
+  const { data: u } = await supabase.auth.getUser();
+  const email = (u?.user?.email || '').toLowerCase();
+  const m = email.match(/^unit(\d+)@gfpl\.com$/);
+  role = { admin: email === 'admin@gfpl.com', unit: m ? 'Unit ' + m[1] : null, email };
+  $('#logout').hidden = false;
+  if (!role.admin && !role.unit) { document.querySelector('.tabs').hidden = true; $('#app').innerHTML = '<div class="card empty">This login is not allowed to use Unit Transfer.<br/>Ask the owner.</div>'; return; }
+  document.querySelector('.tabs').hidden = !role.admin;   // unit users only see the entry screen
   try { await loadBase(); }
   catch (e) { $('#app').innerHTML = `<div class="card empty">Could not connect to the database.<br/><small>${esc(e.message || e)}</small><br/><br/>Did you run the SQL setup files in Supabase?</div>`; return; }
-  draft = restoreDraft(); view = 'new'; detail = null; saved = null;
+  draft = restoreDraft(); view = 'new'; detail = null; edit = null; saved = null;
   render();
 }
 
