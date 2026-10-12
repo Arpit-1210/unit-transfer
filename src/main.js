@@ -397,7 +397,7 @@ function renderEdit() {
       </tbody></table>
       <div class="summary"><span>${e.items.length} item${e.items.length === 1 ? '' : 's'}</span><span>Total qty: ${fmtQty(total)}</span></div>` : '<div class="empty">No items</div>'}
       <div class="addrow" style="margin-top:12px">
-        <div><label>Add product</label><input id="e-prod" list="e-plist" placeholder="Type product name…" autocomplete="off" /><datalist id="e-plist">${products.map((p) => `<option value="${esc(p.name)}"></option>`).join('')}</datalist></div>
+        <div><label>Add product</label><input id="e-prod" list="e-plist" placeholder="Type a product (new names can be added)" autocomplete="off" /><datalist id="e-plist">${products.map((p) => `<option value="${esc(p.name)}"></option>`).join('')}</datalist></div>
         <div><label>Qty</label><input type="number" id="e-pqty" inputmode="numeric" min="1" placeholder="0" style="width:90px" /></div>
         <button class="btn add" id="e-add">+ Add</button>
       </div>
@@ -411,11 +411,22 @@ function renderEdit() {
     grab(); e.items[inp.dataset.eq].qty = v; renderEdit();
   }));
   document.querySelectorAll('[data-edel]').forEach((b) => b.addEventListener('click', () => { grab(); e.items.splice(+b.dataset.edel, 1); renderEdit(); }));
-  $('#e-add').onclick = () => {
-    const p = products.find((x) => x.name.toLowerCase() === $('#e-prod').value.trim().toLowerCase());
+  $('#e-add').onclick = async () => {
+    const typed = $('#e-prod').value.trim();
+    let p = products.find((x) => x.name.toLowerCase() === typed.toLowerCase());
     const qty = parseFloat($('#e-pqty').value);
-    if (!p) return toast('Pick a product from the list', 'error');
+    if (!typed) return toast('Type a product name', 'error');
     if (!qty || qty <= 0) return toast('Enter quantity', 'error');
+    if (!p) {
+      if (!confirm(`"${typed}" is not in the product list.\nAdd it as a new product and put it in this transfer?`)) return;
+      const btn = $('#e-add'); btn.disabled = true;
+      const { data: mx } = await supabase.from('ut_products').select('sno').order('sno', { ascending: false }).limit(1);
+      const sno = (mx?.[0]?.sno || 0) + 1;
+      const { data, error } = await supabase.from('ut_products').insert([{ sno, name: typed, rate: 0, active: true }]).select().single();
+      if (error) { btn.disabled = false; return toast('Could not add product: ' + error.message, 'error'); }
+      products = [...products, data].sort((x, y) => x.name.localeCompare(y.name));
+      p = data; toast(`${typed} (#${sno}) added to catalogue`);
+    }
     grab();
     const ex = e.items.find((i) => i.sno === p.sno);
     if (ex) ex.qty += qty; else e.items.push({ sno: p.sno, name: p.name, qty });
