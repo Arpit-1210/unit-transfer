@@ -82,8 +82,52 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  if (view === 'products') return renderProducts();
   if (view === 'history') return detail ? renderDetail() : renderHistory();
   return saved ? renderSaved() : renderNew();
+}
+
+// ── PRODUCTS (admin: rename / delete) ──
+let prodQ = '';
+function renderProducts() {
+  $('#app').innerHTML = `<div class="card"><h2>Product catalogue</h2>
+    <input id="pq" placeholder="Search ${products.length} products…" value="${esc(prodQ)}" autocomplete="off" />
+    <div id="plist" style="margin-top:10px"></div></div>`;
+  $('#pq').oninput = (e) => { prodQ = e.target.value; drawProducts(); };
+  drawProducts();
+}
+function drawProducts() {
+  const q = prodQ.trim().toLowerCase();
+  const list = products.filter((p) => !q || p.name.toLowerCase().includes(q) || String(p.sno) === q).slice(0, 100);
+  $('#plist').innerHTML = list.map((p) => `<div class="res" style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+      <span style="flex:1">${esc(p.name)}<br/><small>#${p.sno}</small></span>
+      <button class="btn ghost" data-ren="${p.sno}" style="padding:6px 10px">Rename</button>
+      <button class="btn ghost" data-delp="${p.sno}" style="padding:6px 10px;color:#b42318">Delete</button></div>`).join('') || '<div class="empty">No match</div>';
+  document.querySelectorAll('[data-ren]').forEach((b) => b.onclick = () => renameProduct(+b.dataset.ren));
+  document.querySelectorAll('[data-delp]').forEach((b) => b.onclick = () => deleteProduct(+b.dataset.delp));
+}
+async function renameProduct(sno) {
+  const p = products.find((x) => x.sno === sno); if (!p) return;
+  const name = (prompt('Correct product name', p.name) || '').trim();
+  if (!name || name === p.name) return;
+  if (products.some((x) => x.sno !== sno && x.name.toLowerCase() === name.toLowerCase())) return toast('Another product already has this name', 'error');
+  const { error } = await supabase.from('ut_products').update({ name }).eq('sno', sno);
+  if (error) return toast('Could not rename: ' + error.message, 'error');
+  let fixed = '';
+  if (confirm(`Renamed.\nAlso correct the name in past transfers that used "${p.name}"?`)) {
+    const { error: e2 } = await supabase.from('ut_items').update({ product_name: name }).eq('sno', sno).eq('product_name', p.name);
+    fixed = e2 ? ' (history not updated: ' + e2.message + ')' : ' and in history';
+  }
+  p.name = name; products.sort((x, y) => x.name.localeCompare(y.name));
+  toast('Renamed' + fixed); drawProducts();
+}
+async function deleteProduct(sno) {
+  const p = products.find((x) => x.sno === sno); if (!p) return;
+  if (!confirm(`Delete "${p.name}" (#${sno}) from the catalogue?\n\nPast transfers keep their records and PDFs. It just can't be picked for new entries.`)) return;
+  const { error } = await supabase.from('ut_products').delete().eq('sno', sno);
+  if (error) return toast('Could not delete: ' + error.message, 'error');
+  products = products.filter((x) => x.sno !== sno);
+  toast('Deleted ' + p.name); drawProducts();
 }
 
 // ── NEW TRANSFER ──
