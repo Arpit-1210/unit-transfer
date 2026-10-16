@@ -451,7 +451,7 @@ function renderEdit() {
       </tbody></table>
       <div class="summary"><span>${e.items.length} item${e.items.length === 1 ? '' : 's'}</span><span>Total qty: ${fmtQty(total)}</span></div>` : '<div class="empty">No items</div>'}
       <div class="addrow" style="margin-top:12px">
-        <div><label>Add product</label><input id="e-prod" list="e-plist" placeholder="Type a product (new names can be added)" autocomplete="off" /><datalist id="e-plist">${products.map((p) => `<option value="${esc(p.name)}"></option>`).join('')}</datalist></div>
+        <div class="search-wrap"><label>Add product</label><div class="sbox"><input id="e-prod" placeholder="Type a product (new names can be added)" autocomplete="off" /><button type="button" id="e-drop" class="drop" aria-label="Show all products">▾</button></div><div id="e-results" class="results" hidden></div></div>
         <div><label>Qty</label><input type="number" id="e-pqty" inputmode="numeric" min="1" placeholder="0" style="width:90px" /></div>
         <button class="btn add" id="e-add">+ Add</button>
       </div>
@@ -465,6 +465,30 @@ function renderEdit() {
     grab(); e.items[inp.dataset.eq].qty = v; renderEdit();
   }));
   document.querySelectorAll('[data-edel]').forEach((b) => b.addEventListener('click', () => { grab(); e.items.splice(+b.dataset.edel, 1); renderEdit(); }));
+  {
+    const s = $('#e-prod'), r = $('#e-results'); let hi = -1;
+    const show = (q) => {
+      const list = (q ? products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q) : products).slice(0, q ? 30 : 200);
+      r.innerHTML = list.map((p) => `<div class="res" data-name="${esc(p.name)}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || '<div class="res">No match — it will be added as a new product</div>';
+      r.hidden = false; hi = -1;
+    };
+    const choose = (el) => { if (!el || !el.dataset.name) return; s.value = el.dataset.name; r.hidden = true; $('#e-pqty').focus(); };
+    const move = (d) => {
+      const items = [...r.querySelectorAll('.res[data-name]')]; if (!items.length) return;
+      hi = (hi + d + items.length) % items.length;
+      items.forEach((el, i) => { el.style.background = i === hi ? 'var(--blue-soft)' : ''; if (i === hi) el.scrollIntoView({ block: 'nearest' }); });
+    };
+    s.addEventListener('input', () => { const q = s.value.trim().toLowerCase(); if (!q) { r.hidden = true; return; } show(q); });
+    s.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); if (r.hidden) show(s.value.trim().toLowerCase()); move(1); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); move(-1); }
+      else if (ev.key === 'Enter') { const items = [...r.querySelectorAll('.res[data-name]')]; if (!r.hidden && items.length) { ev.preventDefault(); choose(items[hi >= 0 ? hi : 0]); } }
+      else if (ev.key === 'Escape') r.hidden = true;
+    });
+    $('#e-drop').onclick = () => { if (!r.hidden) { r.hidden = true; return; } show(s.value.trim().toLowerCase()); s.focus(); };
+    r.addEventListener('click', (ev) => choose(ev.target.closest('.res[data-name]')));
+    document.addEventListener('click', (ev) => { if (!ev.target.closest('.search-wrap')) r.hidden = true; });
+  }
   $('#e-add').onclick = async () => {
     const typed = $('#e-prod').value.trim();
     let p = products.find((x) => x.name.toLowerCase() === typed.toLowerCase());
