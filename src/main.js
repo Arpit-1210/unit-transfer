@@ -160,7 +160,7 @@ function renderNew() {
       <h2>Add products</h2>
       <div class="search-wrap">
         <label>Search product (name or code)</label>
-        <input id="psearch" placeholder="Type to search ${products.length} products…" autocomplete="off" />
+        <div class="sbox"><input id="psearch" placeholder="Type to search ${products.length} products…" autocomplete="off" /><button type="button" id="pdrop" class="drop" aria-label="Show all products">▾</button></div>
         <div id="presults" class="results" hidden></div>
       </div>
       ${role.admin ? '<button class="link" id="add-product">+ Add new product to catalogue</button>' : ''}
@@ -201,18 +201,28 @@ function renderNew() {
   $('#btn-clear').onclick = () => { if (!d.items.length || confirm('Clear this transfer?')) { draft = blankDraft(); picked = null; persistDraft(); renderNew(); } };
 
   const s = $('#psearch'), r = $('#presults');
-  s.addEventListener('input', () => {
-    const q = s.value.trim().toLowerCase();
-    if (!q) { r.hidden = true; return; }
-    const list = products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q).slice(0, 30);
+  let hi = -1;
+  const show = (q) => {
+    const list = (q ? products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q) : products).slice(0, q ? 30 : 200);
     r.innerHTML = list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('') || `<div class="res">No match${role.admin ? ' — use “+ Add new product to catalogue” below' : ''}</div>`;
-    r.hidden = false;
+    r.hidden = false; hi = -1;
+  };
+  const choose = (el) => { if (!el || !el.dataset.sno) return; picked = products.find((p) => String(p.sno) === el.dataset.sno); r.hidden = true; s.value = ''; renderPicked(); $('#pqty').focus(); };
+  const move = (d) => {
+    const items = [...r.querySelectorAll('.res[data-sno]')]; if (!items.length) return;
+    hi = (hi + d + items.length) % items.length;
+    items.forEach((el, i) => { el.style.background = i === hi ? 'var(--blue-soft)' : ''; if (i === hi) el.scrollIntoView({ block: 'nearest' }); });
+  };
+  s.addEventListener('input', () => { const q = s.value.trim().toLowerCase(); if (!q) { r.hidden = true; return; } show(q); });
+  s.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (r.hidden) show(s.value.trim().toLowerCase()); move(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+    else if (e.key === 'Enter') { const items = [...r.querySelectorAll('.res[data-sno]')]; if (!r.hidden && items.length) { e.preventDefault(); choose(items[hi >= 0 ? hi : 0]); } }
+    else if (e.key === 'Escape') r.hidden = true;
   });
-  r.addEventListener('click', (e) => {
-    const el = e.target.closest('.res[data-sno]'); if (!el) return;
-    picked = products.find((p) => String(p.sno) === el.dataset.sno);
-    r.hidden = true; s.value = ''; renderPicked(); $('#pqty').focus();
-  });
+  $('#pdrop').onclick = () => { if (!r.hidden) { r.hidden = true; return; } show(s.value.trim().toLowerCase()); s.focus(); };
+  r.addEventListener('click', (e) => choose(e.target.closest('.res[data-sno]')));
+  document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) r.hidden = true; });
 }
 
 async function setNumber() {

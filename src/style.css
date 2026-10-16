@@ -72,3 +72,5 @@ td input { padding: 7px 8px; width: 78px; text-align: right; }
 .pwwrap button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--mute); font: 600 12px 'Inter'; cursor: pointer; padding: 6px; }
 .login .err { color: #b91c1c; font-size: 13px; min-height: 18px; margin-bottom: 8px; }
 [hidden] { display: none !important; }
+
+.sbox{position:relative}.sbox input{padding-right:46px}.sbox .drop{position:absolute;right:4px;top:4px;bottom:4px;width:38px;border:0;border-radius:8px;background:var(--blue-soft);color:#1967D2;font-size:18px;cursor:pointer}
