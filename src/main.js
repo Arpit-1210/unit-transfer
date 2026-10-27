@@ -564,7 +564,7 @@ async function startApp() {
   render();
 }
 
-$('#logout').onclick = async () => { await supabase.auth.signOut(); showLogin(); };
+$('#logout').onclick = async () => { await supabase.auth.signOut({ scope: 'local' }); showLogin(); };
 
 // ── start ──
 (async function init() {
