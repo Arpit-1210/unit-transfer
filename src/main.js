@@ -83,8 +83,62 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'products') return renderProducts();
+  if (view === 'byproduct') return detail ? renderDetail() : renderByProduct();
   if (view === 'history') return detail ? renderDetail() : renderHistory();
   return saved ? renderSaved() : renderNew();
+}
+
+// ── BY PRODUCT (admin: every transfer that included a product) ──
+let bp = { q: '', sno: null, rows: null };
+function renderByProduct() {
+  const cur = bp.sno ? products.find((p) => p.sno === bp.sno) : null;
+  $('#app').innerHTML = `<div class="card"><h2>Transfers by product</h2>
+    <input id="bp-q" placeholder="Type product name…" value="${esc(cur ? cur.name : bp.q)}" autocomplete="off" />
+    <div id="bp-sugg" style="margin-top:6px"></div></div><div id="bp-out"></div>`;
+  const sugg = () => {
+    const q = $('#bp-q').value.trim().toLowerCase();
+    const list = q ? products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sno) === q).slice(0, 8) : [];
+    $('#bp-sugg').innerHTML = (list.length === 1 && list[0].sno === bp.sno) ? '' : list.map((p) => `<div class="res" data-sno="${p.sno}"><span>${esc(p.name)}</span><small>#${p.sno}</small></div>`).join('');
+    $('#bp-sugg').querySelectorAll('.res').forEach((r) => r.onclick = () => { bp.sno = +r.dataset.sno; bp.q = ''; bp.rows = null; renderByProduct(); loadByProduct(); });
+  };
+  $('#bp-q').oninput = () => { bp.sno = null; bp.rows = null; $('#bp-out').innerHTML = ''; sugg(); };
+  if (bp.sno && bp.rows) drawByProduct(); else if (bp.sno) loadByProduct(); else sugg();
+}
+async function loadByProduct() {
+  const out = $('#bp-out'); if (!out) return;
+  out.innerHTML = '<div class="empty">Loading…</div>';
+  const sno = bp.sno;
+  const { data: items, error } = await supabase.from('ut_items').select('transfer_id, quantity').eq('sno', sno).limit(5000);
+  if (error) { out.innerHTML = `<div class="empty">Could not load: ${esc(error.message)}</div>`; return; }
+  const qty = {}; (items || []).forEach((i) => { qty[i.transfer_id] = (qty[i.transfer_id] || 0) + Number(i.quantity); });
+  const ids = Object.keys(qty); let rows = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error: e2 } = await supabase.from('ut_transfers').select('*').in('id', ids.slice(i, i + 100));
+    if (e2) { out.innerHTML = `<div class="empty">Could not load: ${esc(e2.message)}</div>`; return; }
+    rows = rows.concat(data || []);
+  }
+  rows.sort((a, b) => String(b.transfer_date).localeCompare(String(a.transfer_date)) || String(b.transfer_no).localeCompare(String(a.transfer_no)));
+  if (bp.sno !== sno) return;
+  bp.rows = rows.map((t) => ({ t, q: qty[t.id] })); drawByProduct();
+}
+function drawByProduct() {
+  const out = $('#bp-out'); if (!out) return;
+  const rows = bp.rows || [];
+  if (!rows.length) { out.innerHTML = '<div class="empty">No transfers have included this product</div>'; return; }
+  const total = rows.reduce((s, r) => s + r.q, 0);
+  const pair = {}; rows.forEach((r) => { const k = `${r.t.from_unit} → ${r.t.to_unit}`; pair[k] = (pair[k] || 0) + r.q; });
+  out.innerHTML = `<div class="card"><b>${rows.length} transfer${rows.length === 1 ? '' : 's'} · total qty ${fmtQty(total)}</b>
+      <div class="meta" style="margin-top:4px">${Object.entries(pair).map(([k, v]) => `${esc(k)}: ${fmtQty(v)}`).join(' · ')}</div></div>` +
+    rows.map(({ t, q }) => `<div class="card hcard" data-id="${t.id}" style="cursor:pointer"><div>
+        <div class="no">${esc(t.transfer_no)}</div>
+        <div class="route-txt">${esc(t.from_unit)} → ${esc(t.to_unit)}</div>
+        <div class="meta">${dmy(t.transfer_date)} · ${esc(t.vehicle_type || '')} ${esc(t.vehicle_no || '')}</div></div>
+        <div style="text-align:right"><b>${fmtQty(q)}</b><div class="meta">qty</div></div></div>`).join('');
+  out.querySelectorAll('.hcard').forEach((c) => c.onclick = async () => {
+    const hit = bp.rows.find((r) => r.t.id === c.dataset.id); if (!hit) return;
+    try { detail = { t: hit.t, items: await fetchItems(hit.t.id) }; } catch (e) { return toast('Could not load: ' + e.message, 'error'); }
+    renderDetail();
+  });
 }
 
 // ── PRODUCTS (admin: rename / delete) ──
@@ -375,7 +429,7 @@ function renderDetail() {
   const { t, items } = detail;
   const total = items.reduce((s, i) => s + Number(i.quantity), 0);
   $('#app').innerHTML = `
-    <button class="link" id="d-back">← Back to history</button>
+    <button class="link" id="d-back">← Back</button>
     <div class="card" style="margin-top:6px">
       <div class="logno"><b>${esc(t.transfer_no)}</b><span class="badge done">Saved</span></div>
       <table><tbody>
@@ -400,7 +454,7 @@ function renderDetail() {
       <button class="btn ghost" id="d-edit">✏️ Edit this transfer</button>
       <button class="btn danger" id="d-del">Delete this transfer</button>
     </div>`;
-  $('#d-back').onclick = () => { detail = null; renderHistory(); };
+  $('#d-back').onclick = () => { detail = null; if (view === 'byproduct') renderByProduct(); else renderHistory(); };
   $('#d-pdf').onclick = () => makePdf(t, items.map((i) => ({ ...i }))).save(`${t.transfer_no}.pdf`);
   $('#d-edit').onclick = startEdit;
   $('#d-del').onclick = async () => {
