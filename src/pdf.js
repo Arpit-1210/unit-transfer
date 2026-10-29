@@ -75,3 +75,47 @@ export function makePdf(t, items) {
   }
   return doc;
 }
+
+/** Daily report for ONE direction (from -> to): rows = [{ sno, name, qty }] sorted by qty, transfers = transfer rows of that day. */
+export function makeDayReport(date, from, to, transfers, rows) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth(); const M = 14;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.setTextColor(25, 103, 210);
+  doc.text('DAILY TRANSFER REPORT', M, 18);
+  doc.setFontSize(11); doc.setTextColor(60); doc.text(dmy(date), W - M, 18, { align: 'right' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(120);
+  doc.text('Propskart  |  Urban Pebbles', M, 24);
+  doc.setDrawColor(25, 103, 210); doc.setLineWidth(0.6); doc.line(M, 27, W - M, 27);
+  const total = rows.reduce((s, r) => s + r.qty, 0);
+  autoTable(doc, {
+    startY: 31, theme: 'grid',
+    styles: { fontSize: 10, cellPadding: 2.6, lineColor: [210, 214, 220], lineWidth: 0.2, textColor: 30 },
+    columnStyles: { 0: { fontStyle: 'bold', fillColor: [243, 246, 251], cellWidth: 34 }, 1: { cellWidth: 'auto' } },
+    body: [
+      ['Route', `${from}  →  ${to}`],
+      ['Date', dmy(date)],
+      ['Transfers', `${transfers.length}${transfers.length ? '  (' + transfers.map((t) => t.transfer_no).join(', ') + ')' : ''}`],
+      ['Total quantity', String(total)],
+    ],
+  });
+  autoTable(doc, {
+    startY: doc.lastAutoTable.finalY + 8, theme: 'striped',
+    headStyles: { fillColor: [25, 103, 210], textColor: 255, fontSize: 10 },
+    footStyles: { fillColor: [243, 246, 251], textColor: 20, fontStyle: 'bold', fontSize: 10 },
+    styles: { fontSize: 10, cellPadding: 2.4 },
+    columnStyles: { 0: { cellWidth: 12, halign: 'center' }, 1: { cellWidth: 22 }, 3: { cellWidth: 28, halign: 'right' } },
+    didParseCell: (d) => { if (d.section === 'head' && d.column.index === 3) d.cell.styles.halign = 'right'; },
+    head: [['#', 'Code', 'Product', 'Qty']],
+    body: rows.length ? rows.map((r, n) => [n + 1, r.sno ?? '', r.name, r.qty]) : [['', '', 'No transfers on this day', '']],
+    foot: [['', '', `Total (${rows.length} product${rows.length === 1 ? '' : 's'})`, total]],
+    showFoot: 'lastPage',
+  });
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p); doc.setFontSize(8); doc.setTextColor(140);
+    const H = doc.internal.pageSize.getHeight();
+    doc.text(`Generated ${nowIST()} IST`, M, H - 8);
+    doc.text(`Page ${p} of ${pages}`, W - M, H - 8, { align: 'right' });
+  }
+  return doc;
+}

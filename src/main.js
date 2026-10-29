@@ -1,6 +1,6 @@
 import './style.css';
 import { supabase } from './supabase.js';
-import { makePdf } from './pdf.js';
+import { makePdf, makeDayReport } from './pdf.js';
 
 // ── helpers ──
 const $ = (s, r = document) => r.querySelector(s);
@@ -83,9 +83,56 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'products') return renderProducts();
+  if (view === 'report') return renderReport();
   if (view === 'byproduct') return detail ? renderDetail() : renderByProduct();
   if (view === 'history') return detail ? renderDetail() : renderHistory();
   return saved ? renderSaved() : renderNew();
+}
+
+// ── DAILY REPORT (admin: one report per direction, per day) ──
+let rep = { date: '', data: null };
+function routePair() {
+  const a = units.find((u) => /^unit\s*1$/i.test(u)) || units[0], b = units.find((u) => /^unit\s*2$/i.test(u)) || units.find((u) => u !== a);
+  return [a, b];
+}
+async function renderReport() {
+  if (!rep.date) rep.date = todayIST();
+  $('#app').innerHTML = `<div class="card"><h2>Daily report</h2>
+    <label>Date</label><input id="r-date" type="date" value="${rep.date}" max="${todayIST()}" />
+    <div style="display:flex;gap:6px;margin-top:8px"><button class="btn ghost sm" id="r-prev">← Previous day</button><button class="btn ghost sm" id="r-today">Today</button></div></div>
+    <div id="r-out"><div class="empty">Loading…</div></div>`;
+  $('#r-date').onchange = (e) => { if (e.target.value) { rep.date = e.target.value; renderReport(); } };
+  $('#r-prev').onclick = () => { const d = new Date(rep.date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); rep.date = d.toISOString().slice(0, 10); renderReport(); };
+  $('#r-today').onclick = () => { rep.date = todayIST(); renderReport(); };
+  const date = rep.date;
+  const { data: tr, error } = await supabase.from('ut_transfers').select('*').eq('transfer_date', date).order('transfer_no');
+  if (error) { $('#r-out').innerHTML = `<div class="empty">Could not load: ${esc(error.message)}</div>`; return; }
+  const ids = (tr || []).map((t) => t.id); let items = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error: e2 } = await supabase.from('ut_items').select('transfer_id, sno, product_name, quantity').in('transfer_id', ids.slice(i, i + 100));
+    if (e2) { $('#r-out').innerHTML = `<div class="empty">Could not load: ${esc(e2.message)}</div>`; return; }
+    items = items.concat(data || []);
+  }
+  if (rep.date !== date || view !== 'report') return;
+  const [a, b] = routePair();
+  const build = (from, to) => {
+    const ts = (tr || []).filter((t) => t.from_unit === from && t.to_unit === to), set = new Set(ts.map((t) => t.id)), m = new Map();
+    items.filter((i) => set.has(i.transfer_id)).forEach((i) => { const k = i.sno != null ? 's' + i.sno : 'n' + i.product_name; const r = m.get(k) || { sno: i.sno, name: i.product_name, qty: 0 }; r.qty += Number(i.quantity); m.set(k, r); });
+    return { from, to, ts, rows: [...m.values()].sort((x, y) => y.qty - x.qty || x.name.localeCompare(y.name)) };
+  };
+  const reps = [build(a, b), build(b, a)];
+  $('#r-out').innerHTML = reps.map((r, n) => {
+    const total = r.rows.reduce((s, x) => s + x.qty, 0);
+    return `<div class="card"><div class="logno"><b>${esc(r.from)} → ${esc(r.to)}</b><span class="badge ${r.ts.length ? 'done' : ''}">${r.ts.length} transfer${r.ts.length === 1 ? '' : 's'}</span></div>
+      ${r.rows.length ? `<div class="meta" style="margin:4px 0 8px">Total qty ${fmtQty(total)} · ${r.rows.length} product${r.rows.length === 1 ? '' : 's'}</div>
+      ${r.rows.map((x) => `<div class="res" style="display:flex;justify-content:space-between;gap:8px"><span>${esc(x.name)}</span><b>${fmtQty(x.qty)}</b></div>`).join('')}`
+      : '<div class="empty">No transfers on this day</div>'}
+      <button class="btn" data-rpt="${n}" style="margin-top:10px;width:100%">Download PDF</button></div>`;
+  }).join('');
+  document.querySelectorAll('[data-rpt]').forEach((btn) => btn.onclick = () => {
+    const r = reps[+btn.dataset.rpt];
+    try { makeDayReport(date, r.from, r.to, r.ts, r.rows).save(`Report ${date} ${r.from} to ${r.to}.pdf`); } catch (e) { toast('Could not create PDF: ' + e.message, 'error'); }
+  });
 }
 
 // ── BY PRODUCT (admin: every transfer that included a product) ──
